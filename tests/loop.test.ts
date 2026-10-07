@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateTiming } from "../src/calibrate";
+import { estimateTiming, replayError } from "../src/calibrate";
 import { DropTracker, Vision, type DropSample } from "../src/loop";
 import { makeTemplate, type Detection, type Match, type PerceptionConfig } from "../src/perception";
 import { DEFAULT_CONFIG, fromJSON, toJSON, type AppConfig } from "../src/storage";
@@ -77,6 +77,10 @@ describe("timing estimate", () => {
     expect(Math.abs(est.userLatencyMs - 30)).toBeLessThanOrEqual(10);
     expect(Math.abs(est.keyLatencyMs - 30)).toBeLessThanOrEqual(10);
     expect(Math.abs(est.carry - 0.4)).toBeLessThanOrEqual(0.06);
+    // Replaying the drops with the fitted timing reproduces where they landed; a wrong delay does not.
+    for (const d of samples) expect(Math.abs(replayError(d, est)!)).toBeLessThan(2);
+    const off = { ...est, userLatencyMs: est.userLatencyMs + 120, keyLatencyMs: est.keyLatencyMs + 120 };
+    expect(Math.max(...samples.map((d) => Math.abs(replayError(d, off)!)))).toBeGreaterThan(10);
   });
 
   it("keeps the previous values when there is nothing to measure", () => {

@@ -64,24 +64,27 @@ export function predictionText(step: Step | null): string {
   return `if dropped now: lands ${side(p.offset)} · ${period} · look-ahead ${fmt(p.landT - p.t)} ms`;
 }
 
-export function renderDrops(tbody: HTMLElement, samples: DropSample[], tolerancePx: number) {
+const cls = (e: number | null, tol: number) => (e === null ? "" : Math.abs(e) <= tol ? "good" : "bad");
+
+/** Last 20 drops; `now` is the error replayed with the timing currently in use. */
+export function renderDrops(tbody: HTMLElement, samples: DropSample[], tolerancePx: number, now: (s: DropSample) => number | null) {
   const rows = samples.slice(-20).reverse().map((s) => {
-    const err = s.error === null ? "" : Math.abs(s.error) <= tolerancePx ? "good" : "bad";
+    const n = now(s);
     return `<tr>
       <td>${s.source}</td><td>${s.status}</td>
-      <td>${fmt(s.tStart === null ? null : s.tStart - s.tKey)}</td>
-      <td>${fmt(s.tStart !== null && s.tLand !== null ? s.tLand - s.tStart : null)}</td>
-      <td>${fmt(s.predicted, 1)}</td><td>${fmt(s.offset, 1)}</td>
-      <td class="${err}">${fmt(s.error, 1)}</td></tr>`;
+      <td>${fmt(s.tLand === null ? null : s.tLand - s.tKey)}</td>
+      <td>${fmt(s.offset, 1)}</td>
+      <td class="${cls(s.error, tolerancePx)}">${fmt(s.error, 1)}</td>
+      <td class="${cls(n, tolerancePx)}">${fmt(n, 1)}</td></tr>`;
   });
-  tbody.innerHTML = rows.join("") || `<tr><td colspan="7" class="muted">no drops yet</td></tr>`;
+  tbody.innerHTML = rows.join("") || `<tr><td colspan="6" class="muted">no drops yet</td></tr>`;
 }
 
-/** Share of landed drops whose landing was predicted within `tolerancePx`. */
-export function accuracy(samples: DropSample[], tolerancePx: number) {
-  const scored = samples.filter((s) => s.error !== null);
-  const within = scored.filter((s) => Math.abs(s.error!) <= tolerancePx).length;
-  const meanAbs = scored.reduce((a, s) => a + Math.abs(s.error!), 0) / Math.max(1, scored.length);
+/** How many errors are within `tolerancePx`, and their mean magnitude. */
+export function accuracy(errors: (number | null)[], tolerancePx: number) {
+  const scored = errors.filter((e): e is number => e !== null);
+  const within = scored.filter((e) => Math.abs(e) <= tolerancePx).length;
+  const meanAbs = scored.reduce((a, e) => a + Math.abs(e), 0) / Math.max(1, scored.length);
   return { scored: scored.length, within, meanAbs: scored.length ? meanAbs : NaN };
 }
 

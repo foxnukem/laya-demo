@@ -1,5 +1,5 @@
 // App wiring: emulator frame, key routing, the vision loop, calibration and timing panels.
-import { Calibrator, estimateTiming, type Tool } from "./calibrate";
+import { Calibrator, estimateTiming, replayError, type Tool } from "./calibrate";
 import { capture, type Captured } from "./capture";
 import { Emulator } from "./emulator";
 import { routeKey, type Effect, type KeyIn, type Mode } from "./input";
@@ -77,6 +77,11 @@ function tick() {
     step = vision ? vision.step(frame, frame.t) : null;
     if (step?.completed) {
       if (step.completed.status !== "nostart") drops.push(step.completed);
+      if (config.settings.autoTune && step.completed.status === "landed") {
+        config.timing = estimateTiming(drops, config.timing);
+        configChanged();
+        syncTimingSliders();
+      }
       renderTiming();
     }
     drawVision($<HTMLCanvasElement>("vision"), frame, step, config.settings.tolerancePx);
@@ -153,25 +158,57 @@ $("test-drop").onclick = async () => {
   await new Promise((r) => setTimeout(r, 60));
   emu.dispatch("keyup", config.settings.dropKey);
 };
-$("apply-timing").onclick = () => {
-  config.timing = estimateTiming(drops, config.timing);
-  configChanged();
-  renderTiming();
-};
 $("reset-drops").onclick = () => {
   drops.length = 0;
   renderTiming();
 };
+const autoTune = $<HTMLInputElement>("auto-tune");
+autoTune.checked = config.settings.autoTune;
+autoTune.onchange = () => {
+  config.settings.autoTune = autoTune.checked;
+  if (autoTune.checked) {
+    config.timing = estimateTiming(drops, config.timing);
+    syncTimingSliders();
+  }
+  configChanged();
+  renderTiming();
+};
+
+// Moving a timing slider is a manual override, so it switches auto-tune off.
+const timingSliders: [string, () => number, (v: number) => void][] = [
+  ["fall-ms", () => config.timing.fallMs, (v) => (config.timing.fallMs = v)],
+  ["carry", () => config.timing.carry, (v) => (config.timing.carry = v)],
+  ["key-latency", () => config.timing.keyLatencyMs, (v) => (config.timing.keyLatencyMs = v)],
+  ["user-latency", () => config.timing.userLatencyMs, (v) => (config.timing.userLatencyMs = v)],
+];
+for (const [id, , set] of timingSliders) {
+  const el = $<HTMLInputElement>(id);
+  el.oninput = () => {
+    set(Number(el.value));
+    config.settings.autoTune = autoTune.checked = false;
+    syncTimingSliders();
+    configChanged();
+    renderTiming();
+  };
+}
+function syncTimingSliders() {
+  for (const [id, get] of timingSliders) {
+    const el = $<HTMLInputElement>(id);
+    el.value = String(get());
+    (el.nextElementSibling as HTMLOutputElement).value = id === "carry" ? get().toFixed(2) : String(Math.round(get()));
+  }
+}
 
 function renderTiming() {
   const tm = config.timing;
-  const est = estimateTiming(drops, tm);
   const tol = config.settings.tolerancePx;
-  $("timing-status").textContent = `in use: fall ${fmt(tm.fallMs)} ms · key ${fmt(tm.keyLatencyMs)} ms · user ${fmt(tm.userLatencyMs)} ms · carry ${fmt(tm.carry, 2)}`;
-  $("timing-measured").textContent = `measured (${est.samples} landed): fall ${fmt(est.fallMs)} ms · key ${fmt(est.keyLatencyMs)} ms · user ${fmt(est.userLatencyMs)} ms · carry ${fmt(est.carry, 2)}`;
-  const acc = accuracy(drops, tol);
-  $("accuracy").textContent = `prediction within ${tol} px: ${acc.within}/${acc.scored} · mean |error| ${fmt(acc.meanAbs, 1)} px`;
-  renderDrops($("drops"), drops, tol);
+  $("timing-status").textContent = `${drops.filter((d) => d.status === "landed").length} landed drops · ${config.settings.autoTune ? "auto-tuned" : "manual"}`;
+  const then = accuracy(drops.map((d) => d.error), tol);
+  const now = accuracy(drops.map((d) => replayError(d, tm)), tol);
+  $("accuracy").textContent =
+    `within ${tol} px — at drop time: ${then.within}/${then.scored} (mean ${fmt(then.meanAbs, 1)} px)` +
+    ` · replayed with these settings: ${now.within}/${now.scored} (mean ${fmt(now.meanAbs, 1)} px)`;
+  renderDrops($("drops"), drops, tol, (d) => replayError(d, tm));
 }
 
 function renderStatic() {
@@ -185,6 +222,7 @@ $("open-lib").onclick = () => emu.openLibrary();
 $("launch").onclick = () => emu.launch() || alert("Open the library, add Tower Bloxx and click it once.");
 rebuildVision();
 renderStatic();
+syncTimingSliders();
 renderTiming();
 if (!emu.launch()) emu.openLibrary();
 tick();

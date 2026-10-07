@@ -37,6 +37,8 @@
     label { display: inline-flex; gap: 4px; align-items: center; }
     input[type=range] { width: 90px; }
     output { min-width: 2ch; font-variant-numeric: tabular-nums; }
+    .tune label { min-width: 46%; }
+    .tune input[type=range] { flex: 1; }
     .tools label { padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
   </style>
@@ -89,13 +91,18 @@
       <h2>Timing <small id="timing-status">–</small></h2>
       <div class="row">
         <button id="test-drop">Test drop (synthetic key)</button>
-        <button id="apply-timing" class="primary">Apply measured timing</button>
+        <label><input id="auto-tune" type="checkbox" /> auto-tune after each drop</label>
         <button id="reset-drops">Reset drops</button>
       </div>
-      <div class="mono" id="timing-measured">–</div>
+      <div class="row tune">
+        <label>fall <input id="fall-ms" type="range" min="100" max="2000" step="10" /><output></output> ms</label>
+        <label>carry <input id="carry" type="range" min="0" max="1" step="0.05" /><output></output></label>
+        <label>key delay <input id="key-latency" type="range" min="0" max="500" step="5" /><output></output> ms</label>
+        <label>your delay <input id="user-latency" type="range" min="0" max="500" step="5" /><output></output> ms</label>
+      </div>
       <div class="mono" id="accuracy">–</div>
       <table>
-        <thead><tr><th>src</th><th>status</th><th>key→fall</th><th>fall</th><th>pred</th><th>actual</th><th>error</th></tr></thead>
+        <thead><tr><th>src</th><th>status</th><th>key→land</th><th>landed at</th><th>err then</th><th>err now</th></tr></thead>
         <tbody id="drops"></tbody>
       </table>
     </section>

@@ -66,6 +66,16 @@ export function estimateTiming(samples: DropSample[], prev: TimingCalibration): 
   };
 }
 
+/**
+ * Prediction error this drop would have had with timing `tm` (predicted − actual landing, px), replayed
+ * from its swing fit at key time. Tower sway is taken as observed, so this isolates the timing.
+ */
+export function replayError(s: DropSample, tm: TimingCalibration): number | null {
+  if (s.status !== "landed" || !s.swing || s.landX === null) return null;
+  const t = s.tKey + (isUser(s) ? tm.userLatencyMs : tm.keyLatencyMs);
+  return evalSine(s.swing, t) + tm.carry * slopeSine(s.swing, t) * tm.fallMs - s.landX;
+}
+
 /** Mean colour of the 3×3 around (x, y). */
 export function sampleColor(f: Frame, x: number, y: number): RGB {
   const sum = [0, 0, 0];

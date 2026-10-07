@@ -67,27 +67,30 @@ export class RandomPlayer implements Player {
 
 /** One forward pass of the Laya model; `ms` is the round trip as the page sees it. */
 export interface LayaBackend {
+  readonly ready?: boolean; // false while the model is still loading
   ask(state: GameState, question: Questions): Promise<{ result: SystemOneResult; ms: number }>;
 }
 
-export type FallbackReason = "busy" | "late" | "error" | "invalid" | "low confidence";
+export type FallbackReason = "not loaded" | "busy" | "late" | "error" | "invalid" | "low confidence";
 
 const LATE = Symbol("late");
 
 /**
- * Laya decides; the heuristic stands in when the model is still busy with an earlier question, answers
+ * Laya decides; the heuristic stands in while the model loads, when it is still busy with an earlier question, answers
  * after the deadline, throws, returns something other than drop/wait, or is less sure than `minConfidence`
  * (answer_confidence: the probability on its chosen option, 0.5..1 for two options).
  */
 export class LayaPlayer implements Player {
   readonly name = "laya";
   readonly latency = new Rolling(100);
-  readonly fallbacks: Record<FallbackReason, number> = { busy: 0, late: 0, error: 0, invalid: 0, "low confidence": 0 };
+  readonly fallbacks: Record<FallbackReason, number> = {
+    "not loaded": 0, busy: 0, late: 0, error: 0, invalid: 0, "low confidence": 0,
+  };
   firstAnswer: SystemOneResult | null = null;
   private pending: Promise<unknown> | null = null;
 
   constructor(
-    private backend: LayaBackend,
+    public backend: LayaBackend, // swapped when the model is (re)loaded
     private minConfidence: () => number,
     private clock: () => number = () => performance.now(),
   ) {}
@@ -98,6 +101,7 @@ export class LayaPlayer implements Player {
       const p = input.predictNow?.() ?? input.prediction;
       return { action: heuristicAction(p, input.tolerancePx), player: "heuristic", fallback: reason, confidence };
     };
+    if (this.backend.ready === false) return fallback("not loaded");
     // The worker answers one question at a time; queueing more would only make them later.
     if (this.pending) return fallback("busy");
     const req = this.backend.ask(input.state, input.question).then((r) => {

@@ -19,9 +19,10 @@ let frame: Captured | null = null;
 let step: Step | null = null;
 const drops: DropSample[] = [];
 const stats = { agent: new Stats(), user: new Stats() };
-const players: Record<string, Player> = { heuristic: new HeuristicPlayer(), random: new RandomPlayer(0.05) };
-const agent = new AgentRunner(players.heuristic, stats.agent);
-let laya: LayaPlayer | null = null;
+// Laya is the default player; until its model has loaded, the heuristic answers for it ("not loaded").
+const laya = new LayaPlayer({ ready: false, ask: () => Promise.reject(new Error("not loaded")) }, () => config.settings.minConfidence);
+const players: Record<string, Player> = { laya, heuristic: new HeuristicPlayer(), random: new RandomPlayer(0.05) };
+const agent = new AgentRunner(laya, stats.agent);
 const log: LogRow[] = [];
 const LOG_CAP = 200_000; // ~2 h of agent play at 30 decisions/s
 const record = (row: LogRow) => {
@@ -204,34 +205,32 @@ const SAMPLE: Prediction = {
   offset: -4, approaching: true, nextCenterMs: 60, periodMs: 2000, swingAmp: 60, swayAmp: 0,
 };
 
-$("laya-load").onclick = async () => {
+async function loadLaya() {
   const btn = $<HTMLButtonElement>("laya-load");
   btn.disabled = true;
+  btn.textContent = "Loading…";
   const status = $("laya-status");
   const worker = new LayaWorker((text) => (status.textContent = text));
   try {
     const { state, question } = framing(SAMPLE, 0);
     const info = await worker.load(`${location.origin}/models/laya`, { state, question });
     console.info("laya: first raw answer", info.raw);
-    laya = new LayaPlayer(worker, () => config.settings.minConfidence);
+    laya.backend = worker;
     laya.latency.push(info.warmupMs);
-    players.laya = laya;
-    const opt = $<HTMLOptionElement>("player-laya");
-    opt.disabled = false;
-    opt.textContent = "laya";
     $("laya-raw").textContent = JSON.stringify(info.raw.answers, null, 1);
     status.textContent = `loaded in ${fmt(info.ms / 1000, 1)} s · ${info.backend}`;
     btn.textContent = "Loaded";
   } catch (err) {
     worker.terminate();
-    status.textContent = "load failed";
+    status.textContent = "load failed: the heuristic plays for it";
     $("laya-info").textContent = String((err as Error).message).split("\n")[0];
+    btn.textContent = "Retry";
     btn.disabled = false;
   }
-};
+}
+$("laya-load").onclick = loadLaya;
 
 function renderLaya() {
-  if (!laya) return;
   const f = laya.fallbacks;
   const reasons = Object.entries(f).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(", ") || "none";
   $("laya-info").textContent =
@@ -370,6 +369,7 @@ $("open-lib").onclick = () => emu.openLibrary();
 $("launch").onclick = () => emu.launch() || alert("Open the library, add Tower Bloxx and click it once.");
 rebuildVision();
 renderStatic();
+loadLaya();
 syncTimingSliders();
 renderTiming();
 if (!emu.launch()) emu.openLibrary();

@@ -13,6 +13,7 @@ export interface LoadInfo {
 
 export class LayaWorker implements LayaBackend {
   backend: Backend | null = null;
+  ready = false;
   private worker: Worker;
   private nextId = 0;
   private waiting = new Map<number, { resolve: (r: { result: SystemOneResult; ms: number }) => void; reject: (e: Error) => void; t0: number }>();
@@ -50,6 +51,7 @@ export class LayaWorker implements LayaBackend {
     if (loaded.type !== "loaded") throw new Error("unexpected worker reply");
     this.backend = loaded.backend;
     const warm = await this.ask(sample.state, sample.question);
+    this.ready = true;
     return { ms: loaded.ms, backend: this.backend, warmupMs: warm.ms, raw: warm.result };
   }
 

@@ -48,6 +48,15 @@ describe("Laya player", () => {
     expect(laya.latency.count).toBe(1);
   });
 
+  it("lets the heuristic play until the model has loaded, without asking it", async () => {
+    let asked = 0;
+    const laya = new LayaPlayer({ ready: false, ask: async () => (asked++, { result: answer("wait", 1), ms: 1 }) }, () => 0.6);
+    expect(await laya.decide(input(pred(0)))).toMatchObject({ action: "drop", player: "heuristic", fallback: "not loaded" });
+    expect(asked).toBe(0);
+    laya.backend = backend(() => answer("wait", 0.9));
+    expect((await laya.decide(input(pred(0)))).player).toBe("laya");
+  });
+
   it("falls back to the heuristic below the confidence threshold", async () => {
     const laya = new LayaPlayer(backend(() => answer("wait", 0.53)), () => 0.6);
     expect(await laya.decide(input(pred(2)))).toMatchObject({ action: "drop", player: "heuristic", fallback: "low confidence", confidence: 0.53 });

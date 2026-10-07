@@ -89,6 +89,7 @@ npm run build    # type check + production build
 
 ## Licenses
 
-- This project: no license file yet.
-- freej2me-web (downloaded into `vendor/freej2me-web/`, with its LICENSE): GPL-3.0.
-- Laya and laya-ts: Apache-2.0.
+- This project: [MIT](LICENSE).
+- laya-ts (bundled as `vendor/laya-ts-*.tgz`, with its LICENSE) and the Laya model: Apache-2.0.
+- freej2me-web: GPL-3.0. Not part of this repository: `npm start` downloads it into `vendor/freej2me-web/` with its LICENSE, and the page only runs it in an iframe.
+- Tower Bloxx is not included; bring your own copy.

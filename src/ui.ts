@@ -1,6 +1,6 @@
 // Rendering only: the live vision canvas with its overlay, the drop table, small formatters.
 import { center, type Box, type Frame } from "./perception";
-import type { DropSample, Step } from "./loop";
+import type { DropSample, StatsSummary, Step } from "./loop";
 import { side } from "./prompt";
 
 export const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -94,4 +94,13 @@ export function download(name: string, text: string, type = "application/json") 
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+export function renderStats(tbody: HTMLElement, rows: [who: string, player: string, s: StatsSummary][]) {
+  tbody.innerHTML = rows
+    .map(([who, player, s]) => `<tr>
+      <td>${who}</td><td class="muted">${player}</td>
+      <td>${s.drops}</td><td>${s.placed}</td><td>${s.perfect}</td><td>${s.missed + s.lost}</td>
+      <td>${fmt(s.meanAbsOffset, 1)}</td><td>${fmt(s.decisionsPerSec, 1)}</td></tr>`)
+    .join("");
 }

@@ -2,6 +2,8 @@
 // DOM-free so it runs in Node tests; main.ts feeds it captured frames and key presses.
 import { center, detect, type Detection, type Frame, type PerceptionConfig } from "./perception";
 import { Predictor, solve3, type Prediction, type SineFit, type Timing } from "./predictor";
+import type { Decision, DecisionInput, Player } from "./players";
+import type { Action, GameState, Questions } from "./prompt";
 
 export type DropSource = "user" | "agent" | "test";
 export type DropStatus = "landed" | "missed" | "nostart" | "lost";
@@ -243,10 +245,158 @@ export class Vision {
     return { t, det, hanging, prediction, completed, perceptionMs };
   }
 
+  /** Enough swing history to trust a decision. */
+  ready(minHistoryMs: number) {
+    return this.predictor.spanMs >= minHistoryMs;
+  }
+
   /** A drop key reached the game at `t`; returns the prediction it was made with. */
   keyPressed(t: number, source: DropSource): Prediction | null {
     const p = this.predictor.predict(t, this.timing(source));
     this.tracker.key(t, source, p?.offset ?? null, this.predictor.size >= 6 ? this.predictor.fit().block : null, this.last);
     return p;
   }
+}
+
+// ---- outcomes and stats ------------------------------------------------------------
+
+export type Outcome = "perfect" | "placed" | "missed" | "lost";
+
+/** Perfect = landed within the tolerance of the tower center; a drop that released nothing is no outcome. */
+export function outcome(s: DropSample, tolerancePx: number): Outcome | null {
+  if (s.status === "nostart") return null;
+  if (s.status === "missed") return "missed";
+  if (s.status === "lost") return "lost";
+  return s.offset !== null && Math.abs(s.offset) <= tolerancePx ? "perfect" : "placed";
+}
+
+export interface StatsSummary {
+  drops: number;
+  placed: number; // perfect included
+  perfect: number;
+  missed: number;
+  lost: number;
+  meanAbsOffset: number;
+  decisions: number;
+  decisionsPerSec: number;
+  stale: number;
+  errors: number;
+}
+
+export class Stats {
+  drops = 0;
+  placed = 0;
+  perfect = 0;
+  missed = 0;
+  lost = 0;
+  decisions = 0;
+  stale = 0;
+  errors = 0;
+  private absOffset = 0;
+  private activeMs = 0;
+  private since: number | null = null;
+
+  record(s: DropSample, tolerancePx: number) {
+    const o = outcome(s, tolerancePx);
+    if (!o) return;
+    this.drops++;
+    if (o === "perfect" || o === "placed") {
+      this.placed++;
+      this.absOffset += Math.abs(s.offset ?? 0);
+    }
+    if (o === "perfect") this.perfect++;
+    if (o === "missed") this.missed++;
+    if (o === "lost") this.lost++;
+  }
+
+  /** The clock for decisions/s runs only while the agent is in control. */
+  setActive(on: boolean, now: number) {
+    if (on && this.since === null) this.since = now;
+    if (!on && this.since !== null) {
+      this.activeMs += now - this.since;
+      this.since = null;
+    }
+  }
+
+  summary(now: number): StatsSummary {
+    const ms = this.activeMs + (this.since === null ? 0 : now - this.since);
+    return {
+      drops: this.drops, placed: this.placed, perfect: this.perfect, missed: this.missed, lost: this.lost,
+      meanAbsOffset: this.placed ? this.absOffset / this.placed : NaN,
+      decisions: this.decisions,
+      decisionsPerSec: ms > 0 ? (this.decisions * 1000) / ms : NaN,
+      stale: this.stale,
+      errors: this.errors,
+    };
+  }
+}
+
+// ---- agent: one decision in flight, each with a deadline -----------------------------
+
+export interface AgentOptions {
+  slackMs: number; // an answer later than its expected latency + slack is stale: its prediction no longer holds
+  minHistoryMs: number; // swing history needed before deciding at all
+}
+
+export const DEFAULT_AGENT: AgentOptions = { slackMs: 100, minHistoryMs: 1200 };
+
+export interface Answer {
+  decision: Decision;
+  latencyMs: number;
+  stale: boolean;
+}
+
+export class AgentRunner {
+  readonly latency = new Rolling(50);
+  busy = false;
+
+  constructor(
+    public player: Player,
+    public stats: Stats,
+    public opts: AgentOptions = DEFAULT_AGENT,
+    private clock: () => number = () => performance.now(),
+  ) {}
+
+  /** Look-ahead to add for this player's own thinking time. */
+  get expectedLatencyMs() {
+    return this.latency.count ? this.latency.mean : 0;
+  }
+
+  /** Ask the player; null while another decision is in flight or when the player threw. */
+  async decide(input: DecisionInput): Promise<Answer | null> {
+    if (this.busy) return null;
+    this.busy = true;
+    const t0 = this.clock();
+    const deadline = t0 + this.expectedLatencyMs + this.opts.slackMs;
+    try {
+      const decision = await this.player.decide(input);
+      const t1 = this.clock();
+      const latencyMs = t1 - t0;
+      this.latency.push(latencyMs);
+      const stale = t1 > deadline;
+      this.stats.decisions++;
+      if (stale) this.stats.stale++;
+      return { decision, latencyMs, stale };
+    } catch {
+      this.stats.errors++;
+      return null;
+    } finally {
+      this.busy = false;
+    }
+  }
+}
+
+/** One training row: what was asked, what the heuristic would say, what was done. */
+export interface LogRow {
+  t: number;
+  kind: "agent" | "user";
+  player: string;
+  state: GameState;
+  question: Questions;
+  label: Action; // heuristic
+  action: Action;
+  latencyMs?: number;
+  stale?: boolean;
+  confidence?: number;
+  fallback?: string;
 }

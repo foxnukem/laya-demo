@@ -38,6 +38,8 @@
     input[type=range] { width: 90px; }
     output { min-width: 2ch; font-variant-numeric: tabular-nums; }
     .tune label { min-width: 46%; }
+    .mode { font-weight: 600; color: var(--text); }
+    .mode.agent { color: var(--good); } .mode.paused { color: var(--warn); }
     .tune input[type=range] { flex: 1; }
     .tools label { padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
@@ -51,8 +53,24 @@
       <div class="row">
         <button id="open-lib">Library</button>
         <button id="launch">Launch stored game</button>
-        <span class="muted">Mode: <b id="mode">manual</b> · hotkey <kbd id="hotkey-name">`</kbd></span>
       </div>
+    </section>
+
+    <section>
+      <h2>Agent <small><span id="mode" class="mode">manual</span> · hotkey <kbd id="hotkey-name">`</kbd></small></h2>
+      <div class="row">
+        <button id="start" class="primary">Start agent</button>
+        <button id="stop">Stop</button>
+        <label>player <select id="player">
+          <option value="heuristic">heuristic</option><option value="random">random</option>
+        </select></label>
+      </div>
+      <div class="muted" id="mode-hint">You play. Press the hotkey or Start to hand over.</div>
+      <table>
+        <thead><tr><th>who</th><th></th><th>drops</th><th>placed</th><th>perfect</th><th>missed</th><th>mean |off|</th><th>dec/s</th></tr></thead>
+        <tbody id="stats"></tbody>
+      </table>
+      <div class="row"><button id="reset-stats">Reset stats</button> <span class="muted" id="log-count"></span></div>
     </section>
 
     <section>

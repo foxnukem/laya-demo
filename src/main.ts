@@ -2,10 +2,13 @@
 import { Calibrator, estimateTiming, replayError, type Tool } from "./calibrate";
 import { capture, type Captured } from "./capture";
 import { Emulator } from "./emulator";
-import { routeKey, type Effect, type KeyIn, type Mode } from "./input";
-import { Vision, type DropSample, type Step } from "./loop";
+import { agentMayAct, routeKey, setMode, type Effect, type KeyIn, type Mode } from "./input";
+import { AgentRunner, Stats, Vision, type DropSample, type LogRow, type Step } from "./loop";
+import { heuristicAction, HeuristicPlayer, RandomPlayer, type Player } from "./players";
+import type { Prediction } from "./predictor";
+import { buildQuestion, buildState } from "./prompt";
 import { fromJSON, isCalibrated, loadConfig, perceptionConfig, saveConfig, timingFor, toJSON } from "./storage";
-import { $, accuracy, download, drawVision, fmt, predictionText, renderDrops } from "./ui";
+import { $, accuracy, download, drawVision, fmt, predictionText, renderDrops, renderStats } from "./ui";
 
 const config = await loadConfig();
 const emu = new Emulator($<HTMLIFrameElement>("emu"));
@@ -14,6 +17,15 @@ let vision: Vision | null = null;
 let frame: Captured | null = null;
 let step: Step | null = null;
 const drops: DropSample[] = [];
+const stats = { agent: new Stats(), user: new Stats() };
+const players: Record<string, Player> = { heuristic: new HeuristicPlayer(), random: new RandomPlayer(0.05) };
+const agent = new AgentRunner(players.heuristic, stats.agent);
+const log: LogRow[] = [];
+const LOG_CAP = 200_000; // ~2 h of agent play at 30 decisions/s
+const record = (row: LogRow) => {
+  log.push(row);
+  if (log.length > LOG_CAP) log.splice(0, log.length - LOG_CAP);
+};
 
 // ---- config -----------------------------------------------------------------
 let saveTimer = 0;
@@ -40,9 +52,36 @@ const routerCfg = () => ({ hotkey: config.settings.hotkey, dropKey: config.setti
 
 function apply(effects: Effect[]) {
   for (const e of effects) {
-    if (e.kind === "userDrop") vision?.keyPressed(performance.now(), "user");
-    if (e.kind === "mode") $("mode").textContent = e.to;
+    if (e.kind === "userDrop") userDrop();
+    if (e.kind === "mode") modeChanged(e.from, e.to);
   }
+}
+
+function modeChanged(from: Mode, to: Mode) {
+  mode = to;
+  stats.agent.setActive(to === "agent", performance.now());
+  const el = $("mode");
+  el.textContent = to === "paused" ? "paused (you took over)" : to;
+  el.className = `mode ${to}`;
+  const hk = $("hotkey-name").textContent;
+  $("mode-hint").textContent = {
+    manual: "You play. Press the hotkey or Start to hand over.",
+    agent: "The agent plays. Press any key to take over; the hotkey stops it.",
+    paused: `You have control. Press ${hk} or Start to give it back.`,
+  }[to];
+  ($("start") as HTMLButtonElement).textContent = to === "paused" ? "Resume agent" : "Start agent";
+  if (from !== to) renderStatsPanel();
+}
+
+/** State, question and heuristic label for a prediction, as every player and every log row sees them. */
+function framing(p: Prediction, placed: number) {
+  const tol = config.settings.tolerancePx;
+  return { state: buildState(p, tol, placed), question: buildQuestion(p, tol), label: heuristicAction(p, tol) };
+}
+
+function userDrop() {
+  const p = vision?.keyPressed(performance.now(), "user");
+  if (p) record({ t: performance.now(), kind: "user", player: "user", action: "drop", ...framing(p, stats.user.placed) });
 }
 
 function onKey(e: KeyboardEvent, origin: KeyIn["origin"]) {
@@ -76,7 +115,10 @@ function tick() {
   if (frame) {
     step = vision ? vision.step(frame, frame.t) : null;
     if (step?.completed) {
-      if (step.completed.status !== "nostart") drops.push(step.completed);
+      const done = step.completed;
+      if (done.status !== "nostart") drops.push(done);
+      if (done.source !== "test") stats[done.source].record(done, config.settings.tolerancePx);
+      renderStatsPanel();
       if (config.settings.autoTune && step.completed.status === "landed") {
         config.timing = estimateTiming(drops, config.timing);
         configChanged();
@@ -84,6 +126,7 @@ function tick() {
       }
       renderTiming();
     }
+    if (mode === "agent" && step) maybeDecide(step);
     drawVision($<HTMLCanvasElement>("vision"), frame, step, config.settings.tolerancePx);
     $("prediction").textContent = vision ? predictionText(step) : "calibrate first";
     const pm = vision?.perceptionMs;
@@ -92,6 +135,58 @@ function tick() {
   $("game-status").textContent = canvas ? `${canvas.width}×${canvas.height} · app ${emu.storedAppId ?? "–"}` : "no game running";
   setTimeout(tick, 1000 / config.settings.visionFps);
 }
+
+// ---- agent ---------------------------------------------------------------------------
+function maybeDecide(st: Step) {
+  const v = vision;
+  if (!v || !st.hanging || v.tracker.active || agent.busy || !v.ready(agent.opts.minHistoryMs)) return;
+  // Look ahead by the key delay plus the player's own thinking time.
+  const p = v.predictor.predict(performance.now(), timingFor(config.timing, "agent", agent.expectedLatencyMs));
+  if (!p) return;
+  const f = framing(p, stats.agent.placed);
+  agent.decide({ prediction: p, state: f.state, question: f.question, tolerancePx: config.settings.tolerancePx }).then((ans) => {
+    if (!ans) return;
+    const d = ans.decision;
+    record({
+      t: performance.now(), kind: "agent", player: d.player, ...f, action: d.action,
+      latencyMs: ans.latencyMs, stale: ans.stale, confidence: d.confidence, fallback: d.fallback,
+    });
+    // A late answer was made for a block that has moved on; a takeover may have happened meanwhile.
+    if (ans.stale || d.action !== "drop" || !agentMayAct(mode) || v.tracker.active || !step?.hanging) return;
+    const t = performance.now();
+    if (!emu.dispatch("keydown", config.settings.dropKey)) return;
+    v.keyPressed(t, "agent");
+    setTimeout(() => emu.dispatch("keyup", config.settings.dropKey), 60);
+  });
+}
+
+function renderStatsPanel() {
+  const now = performance.now();
+  renderStats($("stats"), [
+    [`agent`, agent.player.name, stats.agent.summary(now)],
+    ["you", "", stats.user.summary(now)],
+  ]);
+  $("log-count").textContent = `${log.length} log rows`;
+}
+
+$("start").onclick = () => {
+  const r = setMode(mode, "agent");
+  apply(r.effects);
+};
+$("stop").onclick = () => apply(setMode(mode, "manual").effects);
+const playerSelect = $<HTMLSelectElement>("player");
+playerSelect.onchange = () => {
+  agent.player = players[playerSelect.value];
+  renderStatsPanel();
+};
+$("reset-stats").onclick = () => {
+  stats.agent = new Stats();
+  stats.user = new Stats();
+  agent.stats = stats.agent;
+  stats.agent.setActive(mode === "agent", performance.now());
+  renderStatsPanel();
+};
+setInterval(renderStatsPanel, 1000);
 
 // ---- calibration -------------------------------------------------------------------
 const calib = new Calibrator($<HTMLCanvasElement>("calib"), () => config.calibration, configChanged);

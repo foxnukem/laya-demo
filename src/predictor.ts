@@ -164,6 +164,11 @@ export class Predictor {
     return this.obs.length;
   }
 
+  /** Time covered by the history, ms. */
+  get spanMs() {
+    return this.obs.length ? this.obs[this.obs.length - 1].t - this.obs[0].t : 0;
+  }
+
   fit() {
     if (!this.fits) {
       const ts = this.obs.map((o) => o.t);

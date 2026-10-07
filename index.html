@@ -63,14 +63,29 @@
         <button id="stop">Stop</button>
         <label>player <select id="player">
           <option value="heuristic">heuristic</option><option value="random">random</option>
+          <option value="laya" id="player-laya" disabled>laya (load first)</option>
         </select></label>
       </div>
       <div class="muted" id="mode-hint">You play. Press the hotkey or Start to hand over.</div>
       <table>
-        <thead><tr><th>who</th><th></th><th>drops</th><th>placed</th><th>perfect</th><th>missed</th><th>mean |off|</th><th>dec/s</th></tr></thead>
+        <thead><tr><th>who</th><th></th><th>drops</th><th>placed</th><th>perfect</th><th>missed</th><th>mean |off|</th><th>dec/s</th><th>fallback</th><th>ms mean/p95</th></tr></thead>
         <tbody id="stats"></tbody>
       </table>
       <div class="row"><button id="reset-stats">Reset stats</button> <span class="muted" id="log-count"></span></div>
+    </section>
+
+    <section>
+      <h2>Laya <small id="laya-status">not loaded</small></h2>
+      <div class="row">
+        <button id="laya-load">Load model</button>
+        <span class="muted">~25 s, ~1.7 GB on first load (cached after)</span>
+      </div>
+      <div class="row">
+        <label>min confidence <input id="min-conf" type="range" min="0.5" max="1" step="0.01" /><output></output></label>
+        <label>deadline slack <input id="slack" type="range" min="0" max="600" step="10" /><output></output> ms</label>
+      </div>
+      <div class="mono" id="laya-info"></div>
+      <details><summary class="muted">first raw answer</summary><pre class="mono" id="laya-raw"></pre></details>
     </section>
 
     <section>

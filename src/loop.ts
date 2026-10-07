@@ -281,6 +281,7 @@ export interface StatsSummary {
   decisionsPerSec: number;
   stale: number;
   errors: number;
+  fallbacks: number;
 }
 
 export class Stats {
@@ -292,6 +293,7 @@ export class Stats {
   decisions = 0;
   stale = 0;
   errors = 0;
+  fallbacks = 0;
   private absOffset = 0;
   private activeMs = 0;
   private since: number | null = null;
@@ -327,6 +329,7 @@ export class Stats {
       decisionsPerSec: ms > 0 ? (this.decisions * 1000) / ms : NaN,
       stale: this.stale,
       errors: this.errors,
+      fallbacks: this.fallbacks,
     };
   }
 }
@@ -344,6 +347,7 @@ export interface Answer {
   decision: Decision;
   latencyMs: number;
   stale: boolean;
+  pressAt: number; // clock time the prediction assumed for the key; a fallback decided now goes now
 }
 
 export class AgentRunner {
@@ -357,8 +361,10 @@ export class AgentRunner {
     private clock: () => number = () => performance.now(),
   ) {}
 
-  /** Look-ahead to add for this player's own thinking time. */
+  /** Look-ahead to add for this player's own thinking time: its reported answer times, else measured ones. */
   get expectedLatencyMs() {
+    const own = this.player.latency;
+    if (own?.count) return own.mean;
     return this.latency.count ? this.latency.mean : 0;
   }
 
@@ -367,16 +373,23 @@ export class AgentRunner {
     if (this.busy) return null;
     this.busy = true;
     const t0 = this.clock();
-    const deadline = t0 + this.expectedLatencyMs + this.opts.slackMs;
+    const expected = this.expectedLatencyMs;
+    const deadline = t0 + expected + this.opts.slackMs;
     try {
-      const decision = await this.player.decide(input);
+      const decision = await this.player.decide({ ...input, deadline });
       const t1 = this.clock();
       const latencyMs = t1 - t0;
+      this.stats.decisions++;
+      if (decision.fallback) {
+        // Decided on a fresh prediction at t1: never stale, press right away.
+        this.stats.fallbacks++;
+        return { decision, latencyMs, stale: false, pressAt: t1 };
+      }
       this.latency.push(latencyMs);
       const stale = t1 > deadline;
-      this.stats.decisions++;
       if (stale) this.stats.stale++;
-      return { decision, latencyMs, stale };
+      // An early answer waits for the moment its prediction was made for.
+      return { decision, latencyMs, stale, pressAt: Math.max(t1, t0 + expected) };
     } catch {
       this.stats.errors++;
       return null;

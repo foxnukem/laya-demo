@@ -26,6 +26,8 @@ export interface Settings {
   tolerancePx: number; // a landing this close to the tower center counts as perfect
   visionFps: number;
   autoTune: boolean; // refit timing from all drops after each landing
+  minConfidence: number; // Laya answers less sure than this fall back to the heuristic
+  slackMs: number; // an answer later than the expected latency + slack is stale
 }
 
 export interface AppConfig {
@@ -39,7 +41,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   version: 1,
   calibration: { sky: [], skyTolerance: 18, maxScore: 30, step: 4, block: [], tower: [] },
   timing: { fallMs: 600, keyLatencyMs: 50, userLatencyMs: 50, carry: 0, samples: 0 },
-  settings: { dropKey: DEFAULT_ROUTER.dropKey, hotkey: DEFAULT_ROUTER.hotkey, tolerancePx: 5, visionFps: 30, autoTune: true },
+  settings: { dropKey: DEFAULT_ROUTER.dropKey, hotkey: DEFAULT_ROUTER.hotkey, tolerancePx: 5, visionFps: 30, autoTune: true, minConfidence: 0.6, slackMs: 150 },
 };
 
 export const isCalibrated = (c: Calibration) => c.sky.length > 0 && c.block.length > 0 && c.tower.length > 0;

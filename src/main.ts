@@ -4,7 +4,8 @@ import { capture, type Captured } from "./capture";
 import { Emulator } from "./emulator";
 import { agentMayAct, routeKey, setMode, type Effect, type KeyIn, type Mode } from "./input";
 import { AgentRunner, Stats, Vision, type DropSample, type LogRow, type Step } from "./loop";
-import { heuristicAction, HeuristicPlayer, RandomPlayer, type Player } from "./players";
+import { LayaWorker } from "./laya";
+import { heuristicAction, HeuristicPlayer, LayaPlayer, RandomPlayer, type Player } from "./players";
 import type { Prediction } from "./predictor";
 import { buildQuestion, buildState } from "./prompt";
 import { fromJSON, isCalibrated, loadConfig, perceptionConfig, saveConfig, timingFor, toJSON } from "./storage";
@@ -20,6 +21,7 @@ const drops: DropSample[] = [];
 const stats = { agent: new Stats(), user: new Stats() };
 const players: Record<string, Player> = { heuristic: new HeuristicPlayer(), random: new RandomPlayer(0.05) };
 const agent = new AgentRunner(players.heuristic, stats.agent);
+let laya: LayaPlayer | null = null;
 const log: LogRow[] = [];
 const LOG_CAP = 200_000; // ~2 h of agent play at 30 decisions/s
 const record = (row: LogRow) => {
@@ -140,32 +142,39 @@ function tick() {
 function maybeDecide(st: Step) {
   const v = vision;
   if (!v || !st.hanging || v.tracker.active || agent.busy || !v.ready(agent.opts.minHistoryMs)) return;
+  agent.opts = { ...agent.opts, slackMs: config.settings.slackMs };
   // Look ahead by the key delay plus the player's own thinking time.
   const p = v.predictor.predict(performance.now(), timingFor(config.timing, "agent", agent.expectedLatencyMs));
   if (!p) return;
   const f = framing(p, stats.agent.placed);
-  agent.decide({ prediction: p, state: f.state, question: f.question, tolerancePx: config.settings.tolerancePx }).then((ans) => {
+  const predictNow = () => v.predictor.predict(performance.now(), timingFor(config.timing, "agent"));
+  agent.decide({ prediction: p, state: f.state, question: f.question, tolerancePx: config.settings.tolerancePx, predictNow }).then((ans) => {
     if (!ans) return;
     const d = ans.decision;
     record({
       t: performance.now(), kind: "agent", player: d.player, ...f, action: d.action,
       latencyMs: ans.latencyMs, stale: ans.stale, confidence: d.confidence, fallback: d.fallback,
     });
-    // A late answer was made for a block that has moved on; a takeover may have happened meanwhile.
-    if (ans.stale || d.action !== "drop" || !agentMayAct(mode) || v.tracker.active || !step?.hanging) return;
-    const t = performance.now();
-    if (!emu.dispatch("keydown", config.settings.dropKey)) return;
-    v.keyPressed(t, "agent");
-    setTimeout(() => emu.dispatch("keyup", config.settings.dropKey), 60);
+    if (ans.stale || d.action !== "drop") return;
+    // An early answer waits for the moment its prediction was made for; conditions are checked again then.
+    setTimeout(() => {
+      // A takeover, or the block having gone, cancels the press.
+      if (!agentMayAct(mode) || v.tracker.active || !step?.hanging) return;
+      const t = performance.now();
+      if (!emu.dispatch("keydown", config.settings.dropKey)) return;
+      v.keyPressed(t, "agent");
+      setTimeout(() => emu.dispatch("keyup", config.settings.dropKey), 60);
+    }, Math.max(0, ans.pressAt - performance.now()));
   });
 }
 
 function renderStatsPanel() {
   const now = performance.now();
   renderStats($("stats"), [
-    [`agent`, agent.player.name, stats.agent.summary(now)],
-    ["you", "", stats.user.summary(now)],
+    [`agent`, agent.player.name, stats.agent.summary(now), agent.player.latency ?? agent.latency],
+    ["you", "", stats.user.summary(now), null],
   ]);
+  renderLaya();
   $("log-count").textContent = `${log.length} log rows`;
 }
 
@@ -187,6 +196,48 @@ $("reset-stats").onclick = () => {
   renderStatsPanel();
 };
 setInterval(renderStatsPanel, 1000);
+
+// ---- Laya ------------------------------------------------------------------------------
+// A neutral sample for the warm-up pass; its answer is the one logged at startup.
+const SAMPLE: Prediction = {
+  t: 0, releaseT: 1300, landT: 1900, blockX: 116, blockVx: 80, towerX: 120, towerVx: 0, landX: 116,
+  offset: -4, approaching: true, nextCenterMs: 60, periodMs: 2000, swingAmp: 60, swayAmp: 0,
+};
+
+$("laya-load").onclick = async () => {
+  const btn = $<HTMLButtonElement>("laya-load");
+  btn.disabled = true;
+  const status = $("laya-status");
+  const worker = new LayaWorker((text) => (status.textContent = text));
+  try {
+    const { state, question } = framing(SAMPLE, 0);
+    const info = await worker.load(`${location.origin}/models/laya`, { state, question });
+    console.info("laya: first raw answer", info.raw);
+    laya = new LayaPlayer(worker, () => config.settings.minConfidence);
+    laya.latency.push(info.warmupMs);
+    players.laya = laya;
+    const opt = $<HTMLOptionElement>("player-laya");
+    opt.disabled = false;
+    opt.textContent = "laya";
+    $("laya-raw").textContent = JSON.stringify(info.raw.answers, null, 1);
+    status.textContent = `loaded in ${fmt(info.ms / 1000, 1)} s · ${info.backend}`;
+    btn.textContent = "Loaded";
+  } catch (err) {
+    worker.terminate();
+    status.textContent = "load failed";
+    $("laya-info").textContent = String((err as Error).message).split("\n")[0];
+    btn.disabled = false;
+  }
+};
+
+function renderLaya() {
+  if (!laya) return;
+  const f = laya.fallbacks;
+  const reasons = Object.entries(f).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(", ") || "none";
+  $("laya-info").textContent =
+    `latency mean ${fmt(laya.latency.mean)} ms · p95 ${fmt(laya.latency.p95)} ms` +
+    ` · fallbacks: ${reasons}`;
+}
 
 // ---- calibration -------------------------------------------------------------------
 const calib = new Calibrator($<HTMLCanvasElement>("calib"), () => config.calibration, configChanged);
@@ -223,6 +274,8 @@ slider("sky-tol", () => config.calibration.skyTolerance, (v) => (config.calibrat
 slider("max-score", () => config.calibration.maxScore, (v) => (config.calibration.maxScore = v));
 slider("tolerance", () => config.settings.tolerancePx, (v) => (config.settings.tolerancePx = v));
 slider("vision-fps", () => config.settings.visionFps, (v) => (config.settings.visionFps = v));
+slider("min-conf", () => config.settings.minConfidence, (v) => (config.settings.minConfidence = v));
+slider("slack", () => config.settings.slackMs, (v) => (config.settings.slackMs = v));
 const dropKey = $<HTMLSelectElement>("drop-key");
 dropKey.value = config.settings.dropKey;
 dropKey.onchange = () => {

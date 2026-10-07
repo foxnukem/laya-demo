@@ -1,6 +1,6 @@
 // Rendering only: the live vision canvas with its overlay, the drop table, small formatters.
 import { center, type Box, type Frame } from "./perception";
-import type { DropSample, StatsSummary, Step } from "./loop";
+import type { DropSample, Rolling, StatsSummary, Step } from "./loop";
 import { side } from "./prompt";
 
 export const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -96,11 +96,13 @@ export function download(name: string, text: string, type = "application/json") 
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
-export function renderStats(tbody: HTMLElement, rows: [who: string, player: string, s: StatsSummary][]) {
+export function renderStats(tbody: HTMLElement, rows: [who: string, player: string, s: StatsSummary, latency: Rolling | null][]) {
   tbody.innerHTML = rows
-    .map(([who, player, s]) => `<tr>
+    .map(([who, player, s, lat]) => `<tr>
       <td>${who}</td><td class="muted">${player}</td>
       <td>${s.drops}</td><td>${s.placed}</td><td>${s.perfect}</td><td>${s.missed + s.lost}</td>
-      <td>${fmt(s.meanAbsOffset, 1)}</td><td>${fmt(s.decisionsPerSec, 1)}</td></tr>`)
+      <td>${fmt(s.meanAbsOffset, 1)}</td><td>${fmt(s.decisionsPerSec, 1)}</td>
+      <td>${s.decisions ? fmt((100 * s.fallbacks) / s.decisions) + "%" : "–"}</td>
+      <td>${lat?.count ? `${fmt(lat.mean)}/${fmt(lat.p95)}` : "–"}</td></tr>`)
     .join("");
 }

@@ -20,20 +20,27 @@ export interface Match extends Box {
   score: number; // mean absolute difference per channel, 0 (identical) .. 255
 }
 
+/** Raw pixels cut from a frame; the sky mask is applied when it becomes a Template. */
+export interface Patch {
+  w: number;
+  h: number;
+  rgb: Uint8Array; // w*h*3
+}
+
 export interface Template {
   w: number;
   h: number;
-  rgb: Float32Array; // w*h*3
+  rgb: Uint8Array; // w*h*3
   mask: Uint8Array; // w*h, 1 = pixel counts
 }
 
 export interface PerceptionConfig {
-  block: Template;
-  tower: Template;
+  block: Template[]; // several samples cover size and lighting changes as the camera climbs
+  tower: Template[];
   sky: RGB[];
   skyTolerance: number; // max per-channel distance to a sky sample
   maxScore: number; // matches worse than this are rejected
-  step: number; // coarse search stride in px
+  step: number; // coarse level: k×k pooling, so also the coarse stride in px
 }
 
 export interface Detection {
@@ -50,22 +57,29 @@ export function isSky(r: number, g: number, b: number, sky: RGB[], tol: number):
   return false;
 }
 
-/** Cut a template out of a frame; sky pixels are masked out. */
-export function makeTemplate(frame: Frame, box: Box, sky: RGB[], skyTolerance: number): Template {
+export function cutPatch(frame: Frame, box: Box): Patch {
   const { w, h } = box;
-  const rgb = new Float32Array(w * h * 3);
-  const mask = new Uint8Array(w * h);
+  const rgb = new Uint8Array(w * h * 3);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const i = ((box.y + y) * frame.width + box.x + x) * 4;
-      const j = y * w + x;
-      const [r, g, b] = [frame.data[i], frame.data[i + 1], frame.data[i + 2]];
-      rgb.set([r, g, b], j * 3);
-      mask[j] = isSky(r, g, b, sky, skyTolerance) ? 0 : 1;
+      rgb.set(frame.data.subarray(i, i + 3), (y * w + x) * 3);
     }
   }
-  return { w, h, rgb, mask };
+  return { w, h, rgb };
 }
+
+export function toTemplate(p: Patch, sky: RGB[], skyTolerance: number): Template {
+  const mask = new Uint8Array(p.w * p.h);
+  for (let j = 0; j < mask.length; j++) {
+    mask[j] = isSky(p.rgb[j * 3], p.rgb[j * 3 + 1], p.rgb[j * 3 + 2], sky, skyTolerance) ? 0 : 1;
+  }
+  return { w: p.w, h: p.h, rgb: p.rgb, mask };
+}
+
+/** Cut a template out of a frame; sky pixels are masked out. */
+export const makeTemplate = (frame: Frame, box: Box, sky: RGB[], skyTolerance: number): Template =>
+  toTemplate(cutPatch(frame, box), sky, skyTolerance);
 
 const counts = new WeakMap<Template, number[]>();
 /** Channel values a subsampled pass over the mask compares; the denominator of the final score. */
@@ -134,46 +148,163 @@ export function solidIntegral(frame: Frame, sky: RGB[], tol: number): Int32Array
 const solidIn = (sat: Int32Array, w: number, x: number, y: number, bw: number, bh: number) =>
   sat[(y + bh) * (w + 1) + x + bw] - sat[y * (w + 1) + x + bw] - sat[(y + bh) * (w + 1) + x] + sat[y * (w + 1) + x];
 
-/**
- * Coarse grid search with a subsampled template, then a full-resolution refine around each hit.
- * With `solid` (see solidIntegral), windows holding under half the template's non-sky pixels are skipped.
- */
-export function matchTemplate(frame: Frame, t: Template, maxScore: number, step = 4, solid?: Int32Array): Match[] {
-  const xMax = frame.width - t.w;
-  const yMax = frame.height - t.h;
-  if (xMax < 0 || yMax < 0) return [];
-  const minSolid = maskedChannels(t, 1) / 3 / 2;
-  const coarse: Match[] = [];
-  const coarseCut = maxScore * 1.5;
-  for (let y = 0; y <= yMax; y += step) {
-    for (let x = 0; x <= xMax; x += step) {
-      if (solid && solidIn(solid, frame.width, x, y, t.w, t.h) < minSolid) continue;
-      const s = score(frame, t, x, y, 2, coarseCut);
-      if (s <= coarseCut) coarse.push({ x, y, w: t.w, h: t.h, score: s });
+/** k×k mean-pooled RGB: the coarse level of the search. A shift inside a cell barely changes it. */
+export interface Pooled {
+  w: number;
+  h: number;
+  k: number;
+  rgb: Float32Array; // w*h*3
+  valid: Uint8Array; // w*h, templates only: cell is mostly non-sky
+}
+
+export function poolFrame(f: Frame, k: number): Pooled {
+  const w = Math.floor(f.width / k);
+  const h = Math.floor(f.height / k);
+  const rgb = new Float32Array(w * h * 3);
+  for (let y = 0; y < h * k; y++) {
+    const row = Math.floor(y / k) * w;
+    for (let x = 0; x < w * k; x++) {
+      const i = (y * f.width + x) * 4;
+      const j = (row + Math.floor(x / k)) * 3;
+      rgb[j] += f.data[i];
+      rgb[j + 1] += f.data[i + 1];
+      rgb[j + 2] += f.data[i + 2];
     }
   }
-  const refined: Match[] = [];
-  for (const c of nms(coarse, 0.5)) {
+  for (let j = 0; j < rgb.length; j++) rgb[j] /= k * k;
+  return { w, h, k, rgb, valid: new Uint8Array(w * h).fill(1) };
+}
+
+const pooledTemplates = new WeakMap<Template, Pooled>();
+function poolTemplate(t: Template, k: number): Pooled {
+  const hit = pooledTemplates.get(t);
+  if (hit && hit.k === k) return hit;
+  const w = Math.floor(t.w / k);
+  const h = Math.floor(t.h / k);
+  const rgb = new Float32Array(w * h * 3);
+  const valid = new Uint8Array(w * h);
+  for (let cy = 0; cy < h; cy++) {
+    for (let cx = 0; cx < w; cx++) {
+      const sum = [0, 0, 0];
+      let n = 0;
+      for (let y = cy * k; y < (cy + 1) * k; y++) {
+        for (let x = cx * k; x < (cx + 1) * k; x++) {
+          const j = y * t.w + x;
+          if (!t.mask[j]) continue;
+          for (let c = 0; c < 3; c++) sum[c] += t.rgb[j * 3 + c];
+          n++;
+        }
+      }
+      const cell = cy * w + cx;
+      valid[cell] = n * 2 >= k * k ? 1 : 0;
+      for (let c = 0; c < 3; c++) rgb[cell * 3 + c] = n ? sum[c] / n : 0;
+    }
+  }
+  const p = { w, h, k, rgb, valid };
+  pooledTemplates.set(t, p);
+  return p;
+}
+
+function coarseScore(f: Pooled, t: Pooled, cx: number, cy: number): number {
+  let sum = 0;
+  let n = 0;
+  for (let y = 0; y < t.h; y++) {
+    for (let x = 0; x < t.w; x++) {
+      const j = y * t.w + x;
+      if (!t.valid[j]) continue;
+      const i = ((cy + y) * f.w + cx + x) * 3;
+      sum += Math.abs(f.rgb[i] - t.rgb[j * 3]) + Math.abs(f.rgb[i + 1] - t.rgb[j * 3 + 1]) + Math.abs(f.rgb[i + 2] - t.rgb[j * 3 + 2]);
+      n += 3;
+    }
+  }
+  return n ? sum / n : Infinity;
+}
+
+interface Search {
+  frame: Frame;
+  t: Template;
+  maxScore: number;
+  k: number;
+  coarse: Match[]; // coarse hits after NMS, top to bottom
+}
+
+/** Coarse search on k×k pooled images (k = `step`); skips mostly-sky windows when `solid` is given. */
+function search(frame: Frame, t: Template, maxScore: number, k: number, solid?: Int32Array, pooled?: Pooled): Search {
+  const xMax = frame.width - t.w;
+  const yMax = frame.height - t.h;
+  const coarse: Match[] = [];
+  if (xMax >= 0 && yMax >= 0) {
+    const pf = pooled?.k === k ? pooled : poolFrame(frame, k);
+    const pt = poolTemplate(t, k);
+    const minSolid = maskedChannels(t, 1) / 3 / 2;
+    // Pooling blurs edges against the background, so the coarse level gets a looser cut.
+    const cut = maxScore * 2;
+    for (let cy = 0; cy + pt.h <= pf.h; cy++) {
+      for (let cx = 0; cx + pt.w <= pf.w; cx++) {
+        const x = cx * k;
+        const y = cy * k;
+        if (x > xMax || y > yMax) continue;
+        if (solid && solidIn(solid, frame.width, x, y, t.w, t.h) < minSolid) continue;
+        const s = coarseScore(pf, pt, cx, cy);
+        if (s <= cut) coarse.push({ x, y, w: t.w, h: t.h, score: s });
+      }
+    }
+  }
+  return { frame, t, maxScore, k, coarse: nms(coarse, 0.5).sort((a, b) => a.y - b.y) };
+}
+
+/** Two passes around a coarse hit: subsampled over ±k, then every pixel over ±2 around the best of those. */
+function refine({ frame, t, maxScore, k }: Search, c: Box): Match | null {
+  const xMax = frame.width - t.w;
+  const yMax = frame.height - t.h;
+  const around = (c: Box, r: number, sub: number, cut: number) => {
     let best: Match = { ...c, score: Infinity };
-    for (let y = Math.max(0, c.y - step); y <= Math.min(yMax, c.y + step); y++) {
-      for (let x = Math.max(0, c.x - step); x <= Math.min(xMax, c.x + step); x++) {
-        const s = score(frame, t, x, y, 1, Math.min(best.score, maxScore));
+    for (let y = Math.max(0, c.y - r); y <= Math.min(yMax, c.y + r); y++) {
+      for (let x = Math.max(0, c.x - r); x <= Math.min(xMax, c.x + r); x++) {
+        const s = score(frame, t, x, y, sub, Math.min(best.score, cut));
         if (s < best.score) best = { x, y, w: t.w, h: t.h, score: s };
       }
     }
-    if (best.score <= maxScore) refined.push(best);
-  }
-  return nms(refined);
+    return best;
+  };
+  const mid = around(c, k, 2, maxScore * 2);
+  if (mid.score === Infinity) return null;
+  const best = around(mid, 2, 1, maxScore);
+  return best.score <= maxScore ? best : null;
 }
 
-/** Hanging block = topmost block match; tower top = topmost tower match below it. */
+/** All matches of a template, after non-max suppression. */
+export function matchTemplate(
+  frame: Frame, t: Template, maxScore: number, step = 4, solid?: Int32Array, pooled?: Pooled,
+): Match[] {
+  const s = search(frame, t, maxScore, step, solid, pooled);
+  return nms(s.coarse.map((c) => refine(s, c)).filter((m): m is Match => m !== null));
+}
+
+/** The topmost match whose top is below `minY`: refines coarse hits top to bottom and stops at the first. */
+export function matchTopmost(
+  frame: Frame, t: Template, maxScore: number, step: number, minY: number, solid?: Int32Array, pooled?: Pooled,
+): Match | null {
+  const s = search(frame, t, maxScore, step, solid, pooled);
+  for (const c of s.coarse) {
+    if (c.y + step <= minY) continue;
+    const m = refine(s, c);
+    if (m && m.y > minY) return m;
+  }
+  return null;
+}
+
+const topmost = (frame: Frame, ts: Template[], cfg: PerceptionConfig, minY: number, solid: Int32Array, pooled: Pooled) =>
+  ts
+    .map((t) => matchTopmost(frame, t, cfg.maxScore, cfg.step, minY, solid, pooled))
+    .filter((m): m is Match => m !== null)
+    .sort((a, b) => a.y - b.y || a.score - b.score)[0] ?? null;
+
+/** Hanging block = topmost block match; tower top = topmost tower match below its middle. */
 export function detect(frame: Frame, cfg: PerceptionConfig): Detection {
   const solid = solidIntegral(frame, cfg.sky, cfg.skyTolerance);
-  const blocks = matchTemplate(frame, cfg.block, cfg.maxScore, cfg.step, solid).sort((a, b) => a.y - b.y);
-  const block = blocks[0] ?? null;
+  const pooled = poolFrame(frame, cfg.step);
+  const block = topmost(frame, cfg.block, cfg, -Infinity, solid, pooled);
   const below = block ? block.y + block.h / 2 : -Infinity;
-  const towers = matchTemplate(frame, cfg.tower, cfg.maxScore, cfg.step, solid)
-    .filter((m) => m.y > below)
-    .sort((a, b) => a.y - b.y);
-  return { block, towerTop: towers[0] ?? null };
+  return { block, towerTop: topmost(frame, cfg.tower, cfg, below, solid, pooled) };
 }

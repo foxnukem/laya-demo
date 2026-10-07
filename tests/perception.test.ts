@@ -7,8 +7,8 @@ const SKY = [SKY_TOP, SKY_BOTTOM];
 function config(s: Scene): PerceptionConfig {
   const f = drawScene(s, 0);
   return {
-    block: makeTemplate(f, blockBox(s, 0), SKY, 20),
-    tower: makeTemplate(f, towerTopBox(s, 0), SKY, 20),
+    block: [makeTemplate(f, blockBox(s, 0), SKY, 20)],
+    tower: [makeTemplate(f, towerTopBox(s, 0), SKY, 20)],
     sky: SKY,
     skyTolerance: 20,
     maxScore: 30,
@@ -55,7 +55,7 @@ describe("perception", () => {
   it("reports nothing when the block is absent", () => {
     const cfg = config(SCENE);
     const empty = drawScene({ ...SCENE, towerBlocks: 0, blockTop: -100 }, 0);
-    expect(matchTemplate(empty, cfg.block, cfg.maxScore)).toEqual([]);
+    expect(matchTemplate(empty, cfg.block[0], cfg.maxScore)).toEqual([]);
     expect(detect(empty, cfg)).toEqual({ block: null, towerTop: null });
   });
 

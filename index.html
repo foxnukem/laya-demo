@@ -1,5 +1,116 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8" /><title>Tower Bloxx × Laya</title></head>
-<body><p>App lands in M1. For now: <a href="/spike.html">M0 spike</a>.</p></body>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tower Bloxx × Laya</title>
+  <style>
+    :root {
+      --bg: #f5f5f7; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7;
+      --accent: #0a84ff; --block: #ff3b30; --tower: #34c759; --warn: #ff9f0a; --good: #30d158;
+      --band: rgba(52, 199, 89, 0.45);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1c1c1e; --panel: #2c2c2e; --text: #f5f5f7; --muted: #98989d; --line: #3a3a3c; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100vh; display: flex; background: var(--bg); color: var(--text);
+      font: 13px/1.4 -apple-system, system-ui, sans-serif; }
+    #emu { flex: 1; border: 0; min-width: 0; }
+    aside { width: 480px; overflow: auto; padding: 10px; border-left: 1px solid var(--line); background: var(--bg); }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    h2 { margin: 0 0 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: baseline; }
+    h2 small { font-weight: normal; color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+    button { font: inherit; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--line);
+      background: var(--panel); color: var(--text); cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    canvas { width: 100%; image-rendering: pixelated; background: #000; display: block; border-radius: 4px; }
+    #calib { cursor: crosshair; }
+    .muted { color: var(--muted); }
+    .mono { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+    th, td { text-align: right; padding: 2px 4px; border-bottom: 1px solid var(--line); }
+    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+    td.good { color: var(--good); } td.bad { color: var(--block); }
+    label { display: inline-flex; gap: 4px; align-items: center; }
+    input[type=range] { width: 90px; }
+    output { min-width: 2ch; font-variant-numeric: tabular-nums; }
+    .tools label { padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+  </style>
+</head>
+<body>
+  <iframe id="emu" title="freej2me-web"></iframe>
+  <aside>
+    <section>
+      <h2>Game <small id="game-status">–</small></h2>
+      <div class="row">
+        <button id="open-lib">Library</button>
+        <button id="launch">Launch stored game</button>
+        <span class="muted">Mode: <b id="mode">manual</b> · hotkey <kbd id="hotkey-name">`</kbd></span>
+      </div>
+    </section>
+
+    <section>
+      <h2>Vision <small id="vision-perf">–</small></h2>
+      <canvas id="vision" width="240" height="320"></canvas>
+      <div class="mono" id="prediction">–</div>
+    </section>
+
+    <section>
+      <h2>Calibrate <small id="calib-status">not calibrated</small></h2>
+      <div class="row">
+        <button id="freeze" class="primary">Freeze frame</button>
+        <span class="tools">
+          <label><input type="radio" name="tool" value="block" checked /><span class="dot" style="background:var(--block)"></span>block</label>
+          <label><input type="radio" name="tool" value="tower" /><span class="dot" style="background:var(--tower)"></span>tower top</label>
+          <label><input type="radio" name="tool" value="sky" /><span class="dot" style="background:var(--accent)"></span>sky</label>
+        </span>
+      </div>
+      <canvas id="calib" width="240" height="320"></canvas>
+      <div class="row muted">Drag a tight box around the hanging block / top tower block; click sky in a few places.
+        Controls here are mouse-only: the emulator pulls keyboard focus back to the game.</div>
+      <div class="row">
+        <label>sky tol <input id="sky-tol" type="range" min="0" max="60" /><output></output></label>
+        <label>max score <input id="max-score" type="range" min="5" max="80" /><output></output></label>
+        <button id="undo">Undo last</button>
+        <button id="clear">Clear</button>
+      </div>
+      <div class="row">
+        <button id="export">Export JSON</button>
+        <button id="import">Import JSON</button>
+        <input id="import-file" type="file" accept=".json,application/json" hidden />
+      </div>
+    </section>
+
+    <section>
+      <h2>Timing <small id="timing-status">–</small></h2>
+      <div class="row">
+        <button id="test-drop">Test drop (synthetic key)</button>
+        <button id="apply-timing" class="primary">Apply measured timing</button>
+        <button id="reset-drops">Reset drops</button>
+      </div>
+      <div class="mono" id="timing-measured">–</div>
+      <div class="mono" id="accuracy">–</div>
+      <table>
+        <thead><tr><th>src</th><th>status</th><th>key→fall</th><th>fall</th><th>pred</th><th>actual</th><th>error</th></tr></thead>
+        <tbody id="drops"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Settings</h2>
+      <div class="row">
+        <label>drop key <select id="drop-key">
+          <option value="Digit5">5</option><option value="Enter">Enter</option><option value="ArrowUp">↑</option>
+        </select></label>
+        <label>perfect within <input id="tolerance" type="range" min="1" max="20" /><output></output> px</label>
+        <label>vision <input id="vision-fps" type="range" min="5" max="60" step="5" /><output></output> fps</label>
+      </div>
+    </section>
+  </aside>
+  <script type="module" src="/src/main.ts"></script>
+</body>
 </html>

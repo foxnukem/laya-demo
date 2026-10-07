@@ -45,7 +45,7 @@ export const evalSine = (f: SineFit, t: number) => f.c + f.a * Math.sin(f.omega 
 export const slopeSine = (f: SineFit, t: number) => f.omega * (f.a * Math.cos(f.omega * t) - f.b * Math.sin(f.omega * t));
 export const amplitude = (f: SineFit) => Math.hypot(f.a, f.b);
 
-function solve3(m: number[][], v: number[]): number[] | null {
+export function solve3(m: number[][], v: number[]): number[] | null {
   // Gaussian elimination with partial pivoting, 3x3.
   const a = m.map((row, i) => [...row, v[i]]);
   for (let c = 0; c < 3; c++) {

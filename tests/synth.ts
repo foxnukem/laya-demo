@@ -90,7 +90,36 @@ function drawBlock(data: Uint8ClampedArray, width: number, height: number, x0: n
   }
 }
 
-export function drawScene(s: Scene, t: number) {
+/** A drop: the key reaches the game at tKey; the block leaves the hook latencyMs later and falls for fallMs. */
+export interface Drop {
+  tKey: number;
+  latencyMs: number;
+  fallMs: number;
+  carry: number;
+  respawnMs: number; // landing -> the next block is on the hook
+  accelerate: boolean; // from rest under gravity, else constant speed
+}
+
+export function dropTruth(s: Scene, d: Drop) {
+  const tStart = d.tKey + d.latencyMs;
+  const tLand = tStart + d.fallMs;
+  const landX = blockCenter(s, tStart) + d.carry * blockVelocity(s, tStart) * d.fallMs;
+  return { tStart, tLand, landX, towerX: towerCenter(s, tLand), offset: landX - towerCenter(s, tLand) };
+}
+
+function dropAt(s: Scene, d: Drop, t: number) {
+  const { tStart, tLand, landX } = dropTruth(s, d);
+  const restY = s.towerTop - s.blockH;
+  if (t < tStart) return { hanging: true, falling: null, landedX: null };
+  if (t < tLand) {
+    const k = (t - tStart) / d.fallMs;
+    const x = blockCenter(s, tStart) + d.carry * blockVelocity(s, tStart) * (t - tStart);
+    return { hanging: false, falling: { x, y: s.blockTop + (restY - s.blockTop) * (d.accelerate ? k * k : k) }, landedX: null };
+  }
+  return { hanging: t >= tLand + d.respawnMs, falling: null, landedX: landX };
+}
+
+export function drawScene(s: Scene, t: number, drop?: Drop) {
   const { width, height } = s;
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y++) {
@@ -98,16 +127,25 @@ export function drawScene(s: Scene, t: number) {
     const c = SKY_TOP.map((v, i) => Math.round(v + (SKY_BOTTOM[i] - v) * k));
     for (let x = 0; x < width; x++) data.set([c[0], c[1], c[2], 255], (y * width + x) * 4);
   }
-  const b = blockBox(s, t);
-  // Rope from the pivot to the top center of the block.
-  const bx = b.x + s.blockW / 2;
-  for (let y = 0; y < b.y; y++) {
-    const x = Math.round(s.pivotX + ((bx - s.pivotX) * y) / b.y);
-    data.set(ROPE, (y * width + x) * 4);
+  const st = drop ? dropAt(s, drop, t) : { hanging: true, falling: null, landedX: null };
+  if (st.hanging) {
+    const b = blockBox(s, t);
+    // Rope from the pivot to the top center of the block.
+    const bx = b.x + s.blockW / 2;
+    for (let y = 0; y < b.y; y++) {
+      const x = Math.round(s.pivotX + ((bx - s.pivotX) * y) / b.y);
+      data.set(ROPE, (y * width + x) * 4);
+    }
+    drawBlock(data, width, height, b.x, b.y, s.blockW, s.blockH);
   }
-  drawBlock(data, width, height, b.x, b.y, s.blockW, s.blockH);
+  if (st.falling) {
+    drawBlock(data, width, height, Math.round(st.falling.x - s.blockW / 2), Math.round(st.falling.y), s.blockW, s.blockH);
+  }
   const tb = towerTopBox(s, t);
   for (let i = 0; i < s.towerBlocks; i++) drawBlock(data, width, height, tb.x, tb.y + i * s.blockH, s.blockW, s.blockH);
+  if (st.landedX !== null) {
+    drawBlock(data, width, height, Math.round(st.landedX - s.blockW / 2), s.towerTop - s.blockH, s.blockW, s.blockH);
+  }
   if (s.noise > 0) {
     const r = rng(s.seed + Math.round(t));
     for (let i = 0; i < data.length; i += 4) {

@@ -19,11 +19,13 @@ describe("prompt", () => {
   });
 
   it("describes where a drop now would land", () => {
-    expect(buildQuestion(pred(-4.2, true), 5).action.criteria.drop).toBe("drop: lands 4 px left of the tower center");
+    expect(buildQuestion(pred(-4.2, true), 5).action.criteria.drop).toBe("lands 4 px left of the tower center");
     expect(side(7.6)).toBe("8 px right of the tower center");
     expect(side(0.3)).toBe("on the tower center");
     expect(buildQuestion(pred(20, false, 412.4), 5).action.criteria.wait).toContain("412 ms");
-    expect(buildQuestion(pred(20, false, null), 5).action.criteria.wait).toMatch(/^wait:/);
+    expect(buildQuestion(pred(20, false, null), 5).action.criteria.wait).toBe("hold the block for a better moment");
+    // laya-ts adds the "drop: " / "wait: " labels itself.
+    for (const v of Object.values(buildQuestion(pred(3, true), 5).action.criteria)) expect(v).not.toMatch(/^(drop|wait):/);
   });
 
   it("puts the prediction in a flat, rounded state", () => {

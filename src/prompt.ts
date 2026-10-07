@@ -47,16 +47,17 @@ export function buildState(p: Prediction, tolerancePx: number, blocksPlaced: num
 }
 
 export function buildQuestion(p: Prediction, tolerancePx: number): Questions {
+  // laya-ts renders each option as "label: description", so descriptions carry no label of their own.
   const wait =
     p.nextCenterMs === null
-      ? "wait: hold the block for a better moment"
-      : `wait: the block next lines up with the tower center in ${r(p.nextCenterMs)} ms`;
+      ? "hold the block for a better moment"
+      : `the block next lines up with the tower center in ${r(p.nextCenterMs)} ms`;
   return {
     action: {
       type: "choice",
       instructions: `Tower Bloxx: release the swinging block now, or wait? A drop within ${tolerancePx} px of the tower center is good.`,
       criteria: {
-        drop: `drop: lands ${side(p.offset)}`,
+        drop: `lands ${side(p.offset)}`,
         wait,
       },
     },

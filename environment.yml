@@ -1,0 +1,19 @@
+# Python env for the one-time Laya -> ONNX export (npm run get-model). The app itself needs no Python.
+#   create: conda env create -f environment.yml
+# conda-forge: the only source of PyTorch for Intel Macs (PyPI has no x86_64 macOS wheels).
+name: laya-demo
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - pytorch
+  - transformers
+  - safetensors
+  - huggingface_hub
+  - onnx
+  - onnxscript
+  - onnxruntime
+  - pip
+  - pip:
+      # not on PyPI/conda; pinned to the commit vendor/laya-ts-*.tgz is built from
+      - "laya @ git+https://github.com/NandhaKishorM/laya.git@a4a8921afebfd852bba0000475cfb6ab737a124c"

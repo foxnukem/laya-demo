@@ -1,7 +1,7 @@
 // Produce the split ONNX model laya-ts loads (encoder.onnx + head.onnx + tokenizer + config).
 // No official split export is published on Hugging Face as of 2026-10-06 (convaiinnovations/* ship
 // safetensors only; onnx-community/laya-ONNX is one fused graph), so export it once with laya's own
-// script in the repo's conda env `master-autumn` (see ../../environment.yml).
+// script in the conda env from environment.yml (`laya-demo`; override with LAYA_CONDA_ENV).
 import { existsSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 const COMMIT = "a4a8921afebfd852bba0000475cfb6ab737a124c";
 const REPO = process.argv[2] ?? "convaiinnovations/laya";
-const ENV = "master-autumn";
+const ENV = process.env.LAYA_CONDA_ENV ?? "laya-demo";
 const dir = new URL("../public/models/laya/", import.meta.url).pathname;
 const files = ["encoder.onnx", "head.onnx", "tokenizer.json", "rl_agent_config.json"];
 const missing = () => files.filter((f) => !existsSync(dir + f));

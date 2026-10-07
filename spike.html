@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>M0 spike</title>
+  <style>
+    body { margin: 0; font: 14px/1.4 system-ui, sans-serif; display: flex; height: 100vh; }
+    #emu { flex: 1; border: 0; background: #eee; }
+    #panel { width: 460px; overflow: auto; padding: 12px; border-left: 1px solid #ccc; }
+    section { border: 1px solid #ddd; border-radius: 6px; padding: 8px; margin-bottom: 10px; }
+    h3 { margin: 0 0 6px; font-size: 14px; }
+    .ok { color: #070; } .bad { color: #b00; } .wait { color: #888; }
+    pre { white-space: pre-wrap; font-size: 12px; margin: 4px 0 0; }
+    button { margin: 2px 4px 2px 0; }
+  </style>
+</head>
+<body>
+  <iframe id="emu" title="freej2me-web"></iframe>
+  <div id="panel">
+    <section>
+      <h3>1. Library and canvas</h3>
+      <button id="open-lib">Open library</button>
+      <button id="launch">Launch stored game</button>
+      <pre id="q1" class="wait">waiting…</pre>
+    </section>
+    <section>
+      <h3>2. User keys reach the game</h3>
+      <pre id="q2" class="wait">Click the game, press keys (menus, Enter, 5…)</pre>
+    </section>
+    <section>
+      <h3>3. Synthetic keys</h3>
+      <button data-key="Digit5">Send 5</button>
+      <button data-key="Enter">Send Enter</button>
+      <button data-key="ArrowUp">Send ↑</button>
+      <pre id="q3" class="wait">In a round, press a button and watch whether a block drops.</pre>
+    </section>
+    <section>
+      <h3>4. Laya in Chrome</h3>
+      <button id="laya">Load Laya + 20 predictions</button>
+      <pre id="q4" class="wait">not started</pre>
+    </section>
+  </div>
+  <script type="module" src="/src/spike.ts"></script>
+</body>
+</html>

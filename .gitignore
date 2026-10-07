@@ -1,0 +1,6 @@
+node_modules/
+dist/
+vendor/freej2me-web/
+public/models/laya/*
+!public/models/laya/.gitkeep
+*.calibration.json
